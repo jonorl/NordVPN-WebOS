@@ -1,0 +1,40 @@
+#!/bin/sh
+# Block LG ad / tracking / ACR domains by overlaying /etc/hosts (the system
+# partition is read-only, so the file is copied to /tmp, extended, and
+# bind-mounted over the original). Delete this script and reboot to undo.
+# Install to /var/lib/webosbrew/init.d/01-block-telemetry (no extension), chmod +x.
+
+HOSTS=/etc/hosts
+WORK=/tmp/hosts.blocked
+
+# Re-run safe: drop any previous overlay so we start from the original file.
+grep -q " $HOSTS " /proc/mounts && umount "$HOSTS"
+
+cp "$HOSTS" "$WORK"
+cat >> "$WORK" << 'EOF'
+
+# --- LG ads / telemetry / ACR (added by 01-block-telemetry) ---
+0.0.0.0 ngda.lgthinq.com
+0.0.0.0 lgtvonline.lge.com
+0.0.0.0 ibis.lgsmartcommon.com
+0.0.0.0 common.lgsmartcommon.com
+0.0.0.0 us.info.lgsmartcommon.com
+0.0.0.0 us.ad.lgsmartcommon.com
+0.0.0.0 us.rddx.lgsmartcommon.com
+0.0.0.0 eu.info.lgsmartcommon.com
+0.0.0.0 eu.ad.lgsmartcommon.com
+0.0.0.0 eu.rddx.lgsmartcommon.com
+0.0.0.0 info.lgsmartad.com
+0.0.0.0 us.info.lgsmartad.com
+0.0.0.0 us.ad.lgsmartad.com
+0.0.0.0 eu.info.lgsmartad.com
+0.0.0.0 eu.ad.lgsmartad.com
+0.0.0.0 ad.lgappstv.com
+0.0.0.0 lgad.cjpowercast.com
+0.0.0.0 eic.cqservices.s3.amazonaws.com
+0.0.0.0 smartclip.com
+0.0.0.0 alphonso.tv
+EOF
+
+mount --bind "$WORK" "$HOSTS" && echo "hosts overlay active ($(grep -c '^0.0.0.0' "$WORK") domains blocked)"
+exit 0

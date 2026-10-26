@@ -1,0 +1,30 @@
+#!/bin/sh
+# Hide unwanted LG system apps from the launcher by overlaying their appinfo.json
+# with a copy marked "visible": false. The system partition is never modified:
+# delete this script (and reboot) to bring the apps back.
+# Install to /var/lib/webosbrew/init.d/hide-apps (no file extension) and chmod +x.
+
+APPS="amazon.alexa.view com.webos.app.lgchannels com.webos.app.sportsteamsettings"
+WORK=/tmp/hide-apps
+
+mkdir -p "$WORK"
+for a in $APPS; do
+  orig=/usr/palm/applications/$a/appinfo.json
+  [ -f "$orig" ] || { echo "skip $a (not found)"; continue; }
+
+  # If we already overlaid it (script re-run), remove the overlay first.
+  grep -q " $orig " /proc/mounts && umount "$orig"
+
+  if grep -q '"visible"' "$orig"; then
+    sed 's/"visible"[[:space:]]*:[[:space:]]*true/"visible": false/' "$orig" > "$WORK/$a.json"
+  else
+    sed '1s/{/{ "visible": false,/' "$orig" > "$WORK/$a.json"
+  fi
+
+  if grep -q '"visible": false' "$WORK/$a.json"; then
+    mount --bind "$WORK/$a.json" "$orig" && echo "hidden $a"
+  else
+    echo "skip $a (could not edit appinfo.json)"
+  fi
+done
+exit 0

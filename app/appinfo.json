@@ -1,0 +1,13 @@
+{
+  "id": "com.jonorl.nordrotate",
+  "version": "1.6.2",
+  "vendor": "jonorl",
+  "type": "web",
+  "main": "index.html",
+  "title": "NordVPN WebOS",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#161719",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}

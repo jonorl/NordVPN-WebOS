@@ -1,0 +1,598 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Rotate VPN</title>
+<style>
+  @font-face { font-family: "Inter"; font-weight: 400; src: url("fonts/inter-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Inter"; font-weight: 500; src: url("fonts/inter-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Inter"; font-weight: 600; src: url("fonts/inter-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Inter"; font-weight: 700; src: url("fonts/inter-latin-700-normal.woff2") format("woff2"); }
+
+  :root {
+    --bg: #161719;
+    --card: #202124;
+    --row-sel: #2d2f33;
+    --line: #34363a;
+    --text: #f2f3f5;
+    --muted: #9b9ea4;
+    --faint: #6c6f75;
+    --green: #3fd07f;
+    --amber: #f2b544;
+    --red: #ff6b6b;
+    --blue: #4a6bff;
+    --star: #f5c451;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Inter", "LG Smart UI", Arial, sans-serif; overflow: hidden; }
+  .page { position: absolute; top: 0; right: 0; bottom: 0; left: 0; padding: 44px 120px 0;
+    display: flex; flex-direction: column; box-sizing: border-box; }
+
+  .card { background: var(--card); border-radius: 40px; }
+
+  /* ---- Status card ---- */
+  .status-card { padding: 52px 56px 44px; display: flex; flex-direction: column; flex: none; }
+  .status-top { display: flex; align-items: center; }
+  .flag-ring { width: 140px; height: 140px; border-radius: 50%; padding: 6px; box-sizing: border-box;
+    border: 6px solid var(--faint); flex: none; transition: border-color .3s; }
+  .flag-ring.secured { border-color: var(--green); }
+  .flag-ring.connecting { border-color: var(--amber); }
+  .flag-ring.offline { border-color: var(--red); }
+  .status-text { margin-left: 40px; flex: 1; min-width: 0; }
+  .title { font-size: 68px; font-weight: 700; letter-spacing: -0.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .state { font-size: 40px; font-weight: 600; margin-top: 6px; color: var(--muted); }
+  .state.secured { color: var(--green); } .state.connecting { color: var(--amber); } .state.offline { color: var(--red); }
+  .facts { text-align: right; font-size: 28px; color: var(--muted); line-height: 1.6; flex: none; margin-left: 40px; max-width: 760px; }
+  .facts div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .facts b { color: var(--text); font-weight: 500; }
+
+  .actions { display: flex; align-items: center; margin-top: 44px; }
+  .pill { font: inherit; font-size: 36px; font-weight: 600; color: var(--text); background: #2a2b2e;
+    border: 3px solid #45474c; border-radius: 999px; padding: 26px 80px; outline: none; }
+  .pill:focus { background: #36383d; border-color: #ffffff; transform: scale(1.04); }
+  .pill:disabled { color: var(--faint); border-color: #34363a; background: #242528; transform: none; }
+  .note { margin-left: 44px; flex: 1; min-width: 0; font-size: 28px; color: var(--muted); white-space: pre-line; line-height: 1.45; }
+  .note.ok { color: var(--green); } .note.err { color: var(--red); }
+
+  /* ---- List card ---- */
+  .list-card { margin-top: 36px; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 40px 0; }
+  .list { flex: 1; overflow: hidden; position: relative;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%); }
+  .heading { font-size: 30px; color: var(--muted); padding: 36px 16px 14px; }
+  .tabbar { display: flex; align-items: flex-end; border-bottom: 2px solid var(--line); margin: 28px 0 10px; }
+  .tab { font-size: 34px; font-weight: 500; padding: 14px 16px 22px; border-bottom: 5px solid var(--blue); margin-bottom: -2px; }
+  .tab .back { color: var(--muted); margin-right: 14px; }
+  .info { font-size: 28px; color: var(--faint); padding: 8px 16px 18px; }
+  .row { display: flex; align-items: center; padding: 18px 16px; border-radius: 22px; }
+  .row.sel { background: var(--row-sel); box-shadow: inset 0 0 0 3px #5a5d63; }
+  .flag { width: 64px; height: 64px; border-radius: 50%; overflow: hidden; flex: none; background: #3a3c41;
+    display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 600; color: var(--muted); }
+  .flag img { width: 100%; height: 100%; display: block; }
+  .flag-ring .flag { width: 100%; height: 100%; font-size: 36px; }
+  .row .text { margin-left: 32px; flex: 1; min-width: 0; }
+  .row .name { font-size: 38px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .sub { font-size: 30px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .tags { flex: none; margin-left: 24px; font-size: 26px; color: var(--muted); text-align: right; }
+  .row .star { color: var(--star); font-size: 36px; margin-left: 18px; }
+  .row .now { color: var(--green); font-weight: 600; }
+  .row .chev { color: var(--faint); font-size: 40px; margin-left: 18px; }
+
+  .footer { white-space: pre; flex: none; display: flex; justify-content: space-between; font-size: 24px; color: var(--faint); padding: 22px 20px 26px; }
+  .toast { color: var(--star); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="card status-card">
+    <div class="status-top">
+      <div class="flag-ring" id="ring"><div class="flag" id="bigflag"></div></div>
+      <div class="status-text">
+        <div class="title" id="title">Checking connection…</div>
+        <div class="state" id="state">&nbsp;</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="pill" id="go">New server</button>
+      <div class="note" id="note"></div>
+      <div class="facts" id="facts"></div>
+    </div>
+  </div>
+
+  <div class="card list-card">
+    <div class="list" id="list"></div>
+  </div>
+
+  <div class="footer">
+    <span id="hint"></span>
+    <span><span class="toast" id="toast"></span> &nbsp; <span class="ver">v1.6.2</span></span>
+  </div>
+</div>
+
+<script>
+  // ---- Router endpoints (socat listener running /jffs/scripts/rotate-http.sh) ----
+  var ROUTER = "http://192.168.50.1:8099";
+
+  // Default location: Glasgow + Edinburgh (NordVPN city ids).
+  var DEFAULT_LOC = { query: "city=2978888,2975852", code: "GB", country: "United Kingdom", city: "Glasgow + Edinburgh" };
+
+  // Streaming apps to close on each rotation, so none keeps a session from the old server.
+  // Runs as root through the Homebrew Channel; prints the ids it closed.
+  var CLOSE_CMD = String.raw`luna-send -n 1 luna://com.webos.applicationManager/running '{}' | grep -oE '"id": ?"[^"]+"' | cut -d'"' -f4 | grep -iE 'disney|bbc|iplayer|netflix|^amazon$' | while read a; do luna-send -n 1 luna://com.webos.applicationManager/closeByAppId "{\"id\":\"$a\"}" >/dev/null; echo "$a"; done`;
+  var EXEC_URI = "luna://org.webosbrew.hbchannel.service/exec";
+
+  var WAIT_MS = 150000;      // some NordVPN servers take over a minute to finish connecting
+  var LONG_PRESS_MS = 800;   // hold OK this long to toggle a favourite
+  var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, BACK: 461, ESC: 27, PGUP: 33, PGDN: 34 };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  // ---- Storage (can be unavailable; never rely on it) ----
+  function load(key, fallback) {
+    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; }
+  }
+  function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {} }
+
+  // Older versions stored {label, query, code}; split the label into city and country.
+  function normalise(loc) {
+    if (!loc || !loc.query) return null;
+    if (loc.country) return loc;
+    var label = loc.label || "";
+    var cut = label.lastIndexOf(", ");
+    var isCountry = loc.query.indexOf("country=") === 0;
+    return { query: loc.query, code: loc.code,
+             country: cut >= 0 ? label.slice(cut + 2) : label,
+             city: isCountry ? "" : (cut >= 0 ? label.slice(0, cut) : "") };
+  }
+  function normaliseList(list) { return (list || []).map(normalise).filter(Boolean); }
+
+  var current = normalise(load("location", null)) || DEFAULT_LOC;
+  var recent = normaliseList(load("recent", [DEFAULT_LOC]));
+  var favourites = normaliseList(load("favourites", [DEFAULT_LOC]));
+
+  function key(loc) { return loc.query; }
+  function locLabel(loc) { return loc.city ? loc.city + ", " + loc.country : loc.country; }
+  function isFav(loc) { return !!loc && favourites.some(function (f) { return key(f) === key(loc); }); }
+
+  // ---- Flags ----
+  var FLAG_ALIAS = { uk: "gb" };
+  function flagEl(code, cls) {
+    var box = el("div", "flag" + (cls ? " " + cls : ""));
+    setFlag(box, code);
+    return box;
+  }
+  function setFlag(box, code) {
+    box.innerHTML = "";
+    var c = (code || "").toLowerCase();
+    c = FLAG_ALIAS[c] || c;
+    if (!c) return;
+    var img = document.createElement("img");
+    img.onerror = function () { box.innerHTML = ""; box.textContent = (code || "").toUpperCase(); };
+    img.src = "flags/" + c + ".svg";
+    box.appendChild(img);
+  }
+
+  // ---- Luna bridge (closing streaming apps via the Homebrew Channel) ----
+  var bridges = [];
+  function luna(uri, params, cb) {
+    try {
+      var b = new PalmServiceBridge();
+      bridges.push(b);
+      b.onservicecallback = function (msg) {
+        bridges.splice(bridges.indexOf(b), 1);
+        var res;
+        try { res = JSON.parse(msg); } catch (e) { res = { returnValue: false, errorText: msg }; }
+        cb(res);
+      };
+      b.call(uri, JSON.stringify(params));
+    } catch (e) { cb({ returnValue: false, errorText: String(e) }); }
+  }
+  var NICE = { "com.disney.disneyplus-prod": "Disney+", "amazon": "Prime Video", "netflix": "Netflix" };
+  function closeStreamingApps(cb) {
+    luna(EXEC_URI, { command: CLOSE_CMD }, function (res) {
+      if (!res.returnValue) { cb("Couldn't close streaming apps"); return; }
+      var ids = (res.stdoutString || res.stdout || "").trim().split("\n").filter(Boolean);
+      cb(ids.length ? "Closed " + ids.map(function (i) { return NICE[i] || (/bbc|iplayer/i.test(i) ? "iPlayer" : i); }).join(", ")
+                    : "No streaming apps were open");
+    });
+  }
+
+  function get(url, timeout, cb) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url + (url.indexOf("?") < 0 ? "?" : "&") + "_=" + Date.now());
+    xhr.timeout = timeout;
+    xhr.onload = function () { cb(xhr.status, xhr.responseText || ""); };
+    xhr.onerror = xhr.ontimeout = function () { cb(0, ""); };
+    xhr.send();
+  }
+
+  // ---- Countries (from the router, cached there until it reboots) ----
+  var countries = null, countriesByCode = {}, countriesFailed = false;
+  function loadCountries() {
+    get(ROUTER + "/countries", 40000, function (status, body) {
+      try {
+        if (status !== 200) throw new Error("HTTP " + status);
+        countries = JSON.parse(body).filter(function (c) { return c.cities && c.cities.length; });
+        countries.sort(function (a, b) { return a.name.localeCompare(b.name); });
+        countries.forEach(function (c) { countriesByCode[c.code] = c; });
+        countriesFailed = false;
+      } catch (e) {
+        countriesFailed = true;
+      }
+      refreshList();
+      if (lastExit) showExit(lastExit);
+    });
+  }
+  function countryName(code) { return (countriesByCode[code] && countriesByCode[code].name) || code || ""; }
+
+  // ---- Status card ----
+  var lastExit = null;
+  function setState(kind, text) {
+    $("ring").className = "flag-ring " + kind;
+    $("state").className = "state " + kind;
+    $("state").textContent = text;
+  }
+  function setNote(text, cls) { $("note").textContent = text || ""; $("note").className = "note " + (cls || ""); }
+  function setFacts(lines) {
+    var f = $("facts");
+    f.innerHTML = "";
+    lines.forEach(function (l) {
+      var d = el("div");
+      d.appendChild(document.createTextNode(l[0] + " "));
+      d.appendChild(el("b", null, l[1]));
+      f.appendChild(d);
+    });
+  }
+  function rotatingFact() { return ["Rotating in", locLabel(current)]; }
+
+  function showExit(info) {
+    lastExit = info;
+    if (!info) {
+      setFlag($("bigflag"), "");
+      $("title").textContent = "No internet on this TV";
+      setState("offline", "Not connected");
+      setFacts([rotatingFact()]);
+      return;
+    }
+    setFlag($("bigflag"), info.country);
+    $("title").textContent = [info.city, countryName(info.country)].filter(Boolean).join(", ");
+    setState("secured", "Secured");
+    var facts = [["IP", info.ip]];
+    if (serverName) facts.push(["Server", serverName]);
+    facts.push(rotatingFact());
+    setFacts(facts);
+  }
+
+  function getExit(cb) {
+    get("https://ipinfo.io/json", 8000, function (status, body) {
+      if (status !== 200) { cb(null); return; }
+      try { cb(JSON.parse(body)); } catch (e) { cb(null); }
+    });
+  }
+
+  // ---- Rotation ----
+  var busy = false, serverName = "";
+  function setBusy(b) { busy = b; $("go").disabled = b; if (!b && zone === "top") $("go").focus(); }
+
+  function waitForNewIp(oldIp, started, closedNote) {
+    getExit(function (info) {
+      var secs = Math.round((Date.now() - started) / 1000);
+      if (info && info.ip && info.ip !== oldIp) {
+        showExit(info);
+        var match = !current.code || info.country === current.code;
+        setNote(match ? "Connected in " + secs + " s · reopen your app\n" + closedNote
+                      : "Exit country is " + countryName(info.country) + ", expected " + current.country, match ? "ok" : "err");
+        setBusy(false);
+      } else if (Date.now() - started < WAIT_MS) {
+        setState("connecting", "Connecting… " + secs + " s");
+        setTimeout(function () { waitForNewIp(oldIp, started, closedNote); }, 2000);
+      } else {
+        showExit(info);
+        setNote("Server didn't connect after " + secs + " s · Press OK to try another", "err");
+        setBusy(false);
+      }
+    });
+  }
+
+  function rotate() {
+    if (busy) return;
+    setBusy(true);
+    setNote("Closing streaming apps…");
+    closeStreamingApps(function (closedNote) {
+      var oldIp = lastExit ? lastExit.ip : "";
+      setFlag($("bigflag"), current.code);
+      $("title").textContent = locLabel(current);
+      setFacts([["IP", oldIp || "—"], rotatingFact()]);
+      setState("connecting", "Finding a server…");
+      setNote(closedNote);
+      get(ROUTER + "/rotate?" + current.query, 30000, function (status, body) {
+        var out = body.trim();
+        if (status === 0) {
+          setNote("Couldn't reach the router (" + ROUTER.replace(/^https?:\/\//, "") + ")", "err");
+          showExit(lastExit); setBusy(false); return;
+        }
+        if (status !== 200 || !/->/.test(out)) {
+          setNote("Rotation failed (" + status + "): " + (out || "no output from router"), "err");
+          showExit(lastExit); setBusy(false); return;
+        }
+        var line = out.split("\n").pop();
+        serverName = line.split("->").pop().trim().replace(/\.nordvpn\.com$/, "");
+        setNote(closedNote + "\n" + line.replace(/\.nordvpn\.com/g, "").replace("->", "→"));
+        setState("connecting", "Connecting…");
+        var started = Date.now();
+        setTimeout(function () { waitForNewIp(oldIp, started, closedNote); }, 4000);
+      });
+    });
+  }
+
+  // ---- List (favourites, recent connections, countries / cities) ----
+  var items = [];          // {kind:'heading'|'tab'|'info'|'row', ...}
+  var sel = -1;
+  var zone = "top";        // "top" (button) or "list"
+  var drill = null;        // country object when showing its cities
+
+  function rowsFor(loc, extra) {
+    return Object.assign({ kind: "row", loc: loc, code: loc.code,
+      name: loc.city ? loc.country : loc.country,
+      sub: loc.city || "Any city" }, extra || {});
+  }
+
+  function buildItems() {
+    items = [];
+    if (drill) {
+      var c = drill;
+      items.push({ kind: "tab", text: c.name, back: true });
+      items.push(rowsFor({ query: "country=" + c.id, code: c.code, country: c.name, city: "" },
+        { name: "Anywhere in " + c.name, sub: (c.serverCount ? c.serverCount + " servers · " : "") + "picks any city" }));
+      c.cities.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).forEach(function (city) {
+        items.push(rowsFor({ query: "city=" + city.id, code: c.code, country: c.name, city: city.name },
+          { name: city.name, sub: city.serverCount ? city.serverCount + " servers" : c.name }));
+      });
+      return;
+    }
+    items.push({ kind: "heading", text: "Favourites" });
+    if (favourites.length) favourites.forEach(function (l) { items.push(rowsFor(l)); });
+    else items.push({ kind: "info", text: "Hold OK on any location to add it here" });
+
+    var rec = recent.filter(function (r) { return !isFav(r); });
+    if (rec.length) {
+      items.push({ kind: "heading", text: "Recent connections" });
+      rec.forEach(function (l) { items.push(rowsFor(l)); });
+    }
+
+    items.push({ kind: "tab", text: "Countries" });
+    if (countries) {
+      countries.forEach(function (c) {
+        var names = c.cities.map(function (x) { return x.name; });
+        var sub = names.slice(0, 3).join(", ") + (names.length > 3 ? " +" + (names.length - 3) : "");
+        items.push({ kind: "row", country: c, code: c.code, name: c.name, sub: sub, chev: true,
+          loc: { query: "country=" + c.id, code: c.code, country: c.name, city: "" } });
+      });
+    } else {
+      items.push({ kind: "info", text: countriesFailed ? "Couldn't load countries from the router" : "Loading countries…" });
+    }
+  }
+
+  function selectable(i) { return items[i] && items[i].kind === "row"; }
+
+  function render() {
+    var list = $("list");
+    list.innerHTML = "";
+    items.forEach(function (it, i) {
+      var node;
+      if (it.kind === "heading") node = el("div", "heading", it.text);
+      else if (it.kind === "info") node = el("div", "info", it.text);
+      else if (it.kind === "tab") {
+        node = el("div", "tabbar");
+        var t = el("div", "tab");
+        if (it.back) t.appendChild(el("span", "back", "‹"));
+        t.appendChild(document.createTextNode(it.text));
+        node.appendChild(t);
+      } else {
+        node = el("div", "row" + (i === sel && zone === "list" ? " sel" : ""));
+        node.appendChild(flagEl(it.code));
+        var text = el("div", "text");
+        text.appendChild(el("div", "name", it.name));
+        text.appendChild(el("div", "sub", it.sub));
+        node.appendChild(text);
+        var tags = el("div", "tags");
+        if (key(it.loc) === key(current)) tags.appendChild(el("span", "now", "Selected"));
+        node.appendChild(tags);
+        if (isFav(it.loc)) node.appendChild(el("span", "star", "★"));
+        if (it.chev) node.appendChild(el("span", "chev", "›"));
+        node.addEventListener("mouseover", function () { if (sel !== i || zone !== "list") { zone = "list"; select(i); } });
+        node.addEventListener("click", function () { zone = "list"; select(i); choose(); });
+      }
+      list.appendChild(node);
+    });
+    if (zone === "list" && sel >= 0) scrollTo(sel);
+    updateHint();
+  }
+
+  function scrollTo(i) {
+    var node = $("list").children[i];
+    if (node) node.scrollIntoView({ block: "center" });
+    if (i === firstSelectable()) $("list").scrollTop = 0;
+  }
+
+  function firstSelectable() { for (var i = 0; i < items.length; i++) if (selectable(i)) return i; return -1; }
+
+  function select(i) {
+    var n = items.length;
+    if (!n) return;
+    var dir = i >= sel ? 1 : -1;
+    i = Math.max(0, Math.min(n - 1, i));
+    while (i >= 0 && i < n && !selectable(i)) i += dir;
+    if (i < 0 || i >= n) { i -= dir; while (i >= 0 && i < n && !selectable(i)) i -= dir; }
+    if (!selectable(i)) return;
+    var rows = $("list").children;
+    if (rows[sel]) rows[sel].classList.remove("sel");
+    sel = i;
+    rows[sel].classList.add("sel");
+    scrollTo(sel);
+  }
+
+  // Rebuild the list, keeping the selection on the same location where possible.
+  function refreshList(keepKey, keepCountryId) {
+    var prev = keepKey || (items[sel] && items[sel].loc && key(items[sel].loc));
+    buildItems();
+    var idx = -1;
+    for (var i = 0; i < items.length && idx < 0; i++) {
+      if (!selectable(i)) continue;
+      if (keepCountryId && items[i].country && items[i].country.id === keepCountryId) idx = i;
+      else if (!keepCountryId && prev && key(items[i].loc) === prev) idx = i;
+    }
+    sel = idx >= 0 ? idx : firstSelectable();
+    render();
+  }
+
+  function enterList() {
+    zone = "list";
+    $("go").blur();
+    if (!selectable(sel)) sel = firstSelectable();
+    render();
+  }
+  function enterTop() {
+    zone = "top";
+    render();
+    $("list").scrollTop = 0;
+    if (!busy) $("go").focus();
+  }
+
+  function choose() {
+    var it = items[sel];
+    if (!it || it.kind !== "row") return;
+    if (it.country && it.chev) { openCities(it.country); return; }   // a country: show its cities
+    if (busy) { toast("Still connecting — try again in a moment"); return; }
+    current = it.loc;
+    save("location", current);
+    recent = [current].concat(recent.filter(function (r) { return key(r) !== key(current); })).slice(0, 5);
+    save("recent", recent);
+    drill = null;
+    refreshList(key(current));
+    enterTop();
+    rotate();
+  }
+
+  function openCities(country) {
+    drill = country;
+    sel = -1;
+    refreshList("__none__");
+  }
+  function backToCountries() {
+    var id = drill.id;
+    drill = null;
+    refreshList(null, id);   // reselect the country we came from
+  }
+
+  function toggleFavourite() {
+    var it = items[sel];
+    if (!it || !it.loc) return;
+    var k = key(it.loc);
+    if (isFav(it.loc)) {
+      favourites = favourites.filter(function (f) { return key(f) !== k; });
+      toast("Removed " + locLabel(it.loc) + " from favourites");
+    } else {
+      favourites.push(it.loc);
+      toast("★ Added " + locLabel(it.loc) + " to favourites");
+    }
+    save("favourites", favourites);
+    refreshList(k);
+  }
+
+  var toastTimer = null;
+  function toast(text) {
+    $("toast").textContent = text;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { $("toast").textContent = ""; }, 3000);
+  }
+
+  function updateHint() {
+    $("hint").textContent = zone === "top"
+      ? "OK: new server  ·  ▼: locations  ·  Back: exit"
+      : drill
+        ? "OK: connect  ·  Hold OK: ★ favourite  ·  ◀ / Back: countries  ·  CH ±: page"
+        : "OK: connect  ·  ▶: cities  ·  Hold OK: ★ favourite  ·  CH ±: page  ·  Back: close list";
+  }
+
+  // ---- Keys ----
+  var okTimer = null, okLong = false;
+  document.addEventListener("keyup", function (e) {
+    if (e.keyCode !== KEY.ENTER) return;
+    if (okTimer) {
+      clearTimeout(okTimer); okTimer = null;
+      if (zone === "list") { e.preventDefault(); choose(); }
+    }
+    okLong = false;
+  });
+
+  document.addEventListener("keydown", function (e) {
+    var k = e.keyCode;
+    if (k === KEY.BACK || k === KEY.ESC) {
+      e.preventDefault();
+      if (zone === "list" && drill) backToCountries();
+      else if (zone === "list") enterTop();
+      else window.close();
+      return;
+    }
+    if (zone === "top") {
+      if (k === KEY.DOWN) { e.preventDefault(); enterList(); }
+      return;   // OK on the button is handled natively (click)
+    }
+    // zone === "list"
+    var page = 6;
+    if (k === KEY.UP) {
+      if (sel === firstSelectable()) enterTop(); else select(sel - 1);
+    }
+    else if (k === KEY.DOWN) select(sel + 1);
+    else if (k === KEY.PGUP) select(sel - page);
+    else if (k === KEY.PGDN) select(sel + page);
+    else if (k === KEY.RIGHT) {
+      var it = items[sel];
+      if (!drill && it && it.country && it.chev) openCities(it.country);
+    }
+    else if (k === KEY.LEFT) {
+      if (drill) backToCountries();
+    }
+    else if (k === KEY.ENTER) {
+      if (!okTimer && !okLong) {
+        okTimer = setTimeout(function () { okTimer = null; okLong = true; toggleFavourite(); }, LONG_PRESS_MS);
+      }
+    }
+    else return;
+    e.preventDefault();
+  });
+
+  $("go").addEventListener("click", function () { if (zone === "top") rotate(); });
+  $("go").addEventListener("mouseover", function () { if (zone !== "top") enterTop(); else if (!busy) $("go").focus(); });
+  window.addEventListener("focus", function () { if (zone === "top" && !busy) $("go").focus(); });
+
+  // ---- Start ----
+  setFlag($("bigflag"), current.code);
+  setFacts([rotatingFact()]);
+  buildItems(); render();
+  $("go").focus();
+  getExit(showExit);
+  loadCountries();
+
+  // Show the installed version (read from the app's own appinfo.json).
+  (function () {
+    var x = new XMLHttpRequest();
+    x.open("GET", "appinfo.json");
+    x.onload = function () {
+      try {
+        var v = "v" + JSON.parse(x.responseText).version;
+        Array.prototype.forEach.call(document.querySelectorAll(".ver"), function (s) { s.textContent = v; });
+      } catch (e) {}
+    };
+    x.send();
+  })();
+</script>
+</body>
+</html>
