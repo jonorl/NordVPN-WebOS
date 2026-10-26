@@ -35,8 +35,6 @@ Asuswrt-Merlin 3006.102.7, NordVPN OpenVPN "2.6" configs.
 | `router/install.sh` | Copies both scripts to the router and starts the listener |
 | `tools/install-app.sh` | Builds the app and installs it on the TV |
 | `tools/nord-probe.py` | Lists NordVPN's country and city ids |
-| `extras/tv-init.d/` | Optional TV cleanup: hide unused apps, block LG telemetry |
-| `extras/vlc-remote/` | Optional: use the Magic Remote to control VLC on a Linux PC |
 
 ## Requirements
 
@@ -225,34 +223,6 @@ ssh admin@192.168.50.1 'nvram get vpn_client1_state; nvram get vpn_client1_addr;
 | `No servers returned from NordVPN API` | Wrong city/country id, or the router can't reach `api.nordvpn.com`. |
 | TV not in the VPN country | Check the VPN Director rule and that the TV still has its reserved IP. |
 | Streaming app still blocked | Most NordVPN IPs are known to the big services; rotating helps sometimes. Fully close the app (the app does this for you) before retrying. |
-
-## Extras (optional)
-
-### `extras/tv-init.d/`
-
-Startup scripts for the Homebrew Channel. Copy them to
-`/var/lib/webosbrew/init.d/` on the TV, `chmod +x`, and reboot. File names
-must not contain a dot (they are run by `run-parts`).
-
-* `hide-apps`: hides Amazon Alexa, LG Channels and Sports from the launcher
-  by overlaying their `appinfo.json` (LG Channels' visibility is controlled
-  elsewhere, so it stays). Edit `APPS` to change the list.
-* `01-block-telemetry`: points LG ad / tracking / ACR domains to `0.0.0.0`
-  via an `/etc/hosts` overlay. It works through the VPN too, since the hosts
-  file is checked before DNS.
-
-Both only bind-mount files in `/tmp` over the originals; delete the script
-and reboot to undo.
-
-### `extras/vlc-remote/`
-
-`lg_remote_bridge.py` reads Magic Remote button presses on the TV over SSH
-(`/dev/input/event3`, 16-byte events on the C1's 32-bit userland) and
-controls VLC on a Linux PC through `playerctl`: OK = play/pause, ◀ ▶ = seek
-10 s, ▲ ▼ = volume. Needs `playerctl` and key-based SSH to the TV.
-`lg-remote.service` runs it as a systemd user service
-(`~/.config/systemd/user/`, then `systemctl --user enable --now lg-remote`).
-Use `--debug` to print key codes.
 
 ## Licences
 
