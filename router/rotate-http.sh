@@ -50,7 +50,8 @@ case "$path" in
     ;;
   /countries)
     if [ -n "$(param refresh)" ] || [ ! -s "$COUNTRIES_CACHE" ]; then
-      curl -s --max-time 30 https://api.nordvpn.com/v1/servers/countries > "$COUNTRIES_CACHE.tmp" \
+      curl -s --connect-timeout 8 --max-time 15 --retry 1 --retry-delay 1 \
+          https://api.nordvpn.com/v1/servers/countries > "$COUNTRIES_CACHE.tmp" \
         && grep -q '"cities"' "$COUNTRIES_CACHE.tmp" \
         && mv "$COUNTRIES_CACHE.tmp" "$COUNTRIES_CACHE"
       rm -f "$COUNTRIES_CACHE.tmp"

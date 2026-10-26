@@ -155,6 +155,10 @@ Router endpoints (all `GET`, TV only):
 | `/countries[?refresh=1]` | NordVPN's country and city list (cached until reboot) |
 | `/status` | Current server and tunnel state (`2` = connected) |
 
+Server lists are saved per location in `/jffs/scripts/nord-cache/` and
+reused for 30 minutes, so most rotations don't contact NordVPN at all. If
+NordVPN's API can't be reached, the last saved list is used instead.
+
 You can also rotate by hand on the router:
 `/jffs/scripts/nord-rotate.sh`, `… city 2978888`, or `… country 227`.
 
@@ -220,7 +224,7 @@ ssh admin@192.168.50.1 'nvram get vpn_client1_state; nvram get vpn_client1_addr;
 | Takes 60–150 s to connect | Log shows `PUSH_REQUEST` repeated, then `No reply from server to push requests`. NordVPN's server stalls; OpenVPN retries after 60 s. Wait, or switch server. |
 | `VERIFY X509NAME ERROR` | Remove `verify-x509-name` from Custom Configuration (step 2.3). |
 | `Couldn't reach the router` | Listener not running: `ssh admin@192.168.50.1 'pidof socat'`; rerun `router/install.sh`. |
-| `No servers returned from NordVPN API` | Wrong city/country id, or the router can't reach `api.nordvpn.com`. |
+| `No servers available: NordVPN unreachable and no saved list yet` | The router couldn't reach `api.nordvpn.com` (its own lookups are sometimes slow) and has never fetched this location before. Try again; once a location has been fetched, its saved list is used as a fallback. Also check the city/country id. |
 | TV not in the VPN country | Check the VPN Director rule and that the TV still has its reserved IP. |
 | Streaming app still blocked | Most NordVPN IPs are known to the big services; rotating helps sometimes. Fully close the app (the app does this for you) before retrying. |
 
