@@ -1,48 +1,57 @@
 # nordvpn-webos
 
-Route a rooted LG webOS TV (and only the TV) through NordVPN on an
-Asuswrt-Merlin router, and pick or rotate the server from the TV with the
-remote.
+Route a rooted LG webOS TV (and only the TV) through NordVPN (NordLynx,
+i.e. WireGuard) on an Asuswrt-Merlin router, and pick or rotate the server
+from the TV with the remote.
 
 ```
  TV app "Rotate VPN"  --HTTP-->  router listener (socat, port 8099, TV only)
         |                              |
         |                              +--> /jffs/scripts/nord-rotate.sh
         |                                     asks NordVPN's API for a server,
-        |                                     sets VPN client 1's address,
-        |                                     restarts the tunnel
+        |                                     sets WireGuard client 1's endpoint
+        |                                     and key, restarts the tunnel
         |
-        +--> TV internet --> VPN Director rule --> OpenVPN client 1 --> NordVPN
+        +--> TV internet --> VPN Director rule --> WireGuard client 1 --> NordVPN
 ```
 
 * Only the TV's traffic goes through NordVPN; every other device uses the
   normal connection.
-* The kill switch blocks the TV's internet while the tunnel is down, so
-  streaming services never see your real IP.
-* Every NordVPN server shares the same CA, tls-crypt key and port, so
-  switching server (in any country) only changes the server address.
+* The WireGuard client's kill switch blocks the TV's internet while the
+  tunnel is down, so streaming services never see your real IP.
+* NordLynx uses one private key per account and the same tunnel address for
+  everyone, so switching server (in any country) only changes the endpoint
+  and the server's public key.
 
 Tested on: LG C1 (webOS 6, rooted, Homebrew Channel), RT-AX86U Pro with
-Asuswrt-Merlin 3006.102.7, NordVPN OpenVPN "2.6" configs.
+Asuswrt-Merlin 3006.102.7.
+
+> Why WireGuard: this setup first used OpenVPN, but NordVPN's OpenVPN UDP
+> servers only listen on port 53, and some ISPs throttle or drop UDP 53 (the
+> DNS port), especially in the evening: 60-second connection stalls and
+> constant reconnects. NordLynx uses UDP 51820, like NordVPN's own apps.
 
 ## Repository layout
 
 | Path | What it is |
 | --- | --- |
 | `app/` | The webOS app (plain HTML/JS; `index.html` is the whole app) |
-| `router/nord-rotate.sh` | Picks a NordVPN server and switches VPN client 1 to it |
+| `router/nord-rotate.sh` | Picks a NordVPN server and switches WireGuard client 1 to it |
 | `router/rotate-http.sh` | HTTP handler run by `socat` for the TV app |
-| `router/nord-watchdog.sh` | Restarts or replaces a connection attempt that stalls |
-| `router/install.sh` | Copies the scripts to the router and starts the listener and watchdog |
+| `router/nord-api.sh` | Fetches from NordVPN's API without depending on DNS |
+| `router/nord-watchdog.sh` | Switches server when the current one stops answering |
+| `router/install.sh` | Copies the scripts to the router and starts everything |
+| `tools/nordlynx-key.sh` | Fetches your NordLynx private key and stores it on the router |
 | `tools/install-app.sh` | Builds the app and installs it on the TV |
 | `tools/nord-probe.py` | Lists NordVPN's country and city ids |
 
 ## Requirements
 
 * A rooted LG webOS TV with the **Homebrew Channel** and its SSH server enabled.
-* An Asus router running **Asuswrt-Merlin** (3006 series used here).
+* An Asus router running **Asuswrt-Merlin** (3006 series, which has a
+  WireGuard client).
 * A NordVPN subscription.
-* On your PC: `ssh`, and to build the app, Node.js plus LG's CLI:
+* On your PC: `ssh`, `curl`, and to build the app, Node.js plus LG's CLI:
   `sudo pacman -S nodejs npm && npm install -g @webos-tools/cli`
   (put npm's global prefix in your home folder first if you prefer,
   `npm config set prefix ~/.local`).
@@ -66,76 +75,13 @@ with `ssh root@TV 'cat /sys/class/net/wlan0/address'`) with IP
 Both the VPN Director rule and the listener's access restriction depend on
 this IP.
 
-## 2. Set up the NordVPN OpenVPN client
-
-1. In your Nord Account: **NordVPN → Set up NordVPN manually**. Note the
-   **service credentials** (a separate username/password, not your login),
-   then download any **UDP** OpenVPN config for a server you want to start
-   with (the `…udp_2.6.ovpn` files).
-2. On the router, **VPN → VPN Client → OpenVPN**, select **Client 1**:
-   * **Import .ovpn file** → choose the file → **Upload**.
-   * **Description**: anything, e.g. `NordVPN`.
-   * **Username / Password**: the service credentials.
-   * **Username / Password Auth. Only**: **No** (NordVPN uses a CA certificate
-     *and* a password).
-   * **Accept DNS Configuration**: **Exclusive** (the TV uses NordVPN's DNS).
-   * **Redirect Internet traffic through tunnel**: **VPN Director**.
-   * **Killswitch – Block routed clients if tunnel goes down**: **Yes**.
-   * **Verify Server Certificate Name**: **No** (rotation changes the server).
-   * **Keys and Certificates → Edit**: *Certificate Authority* and *Static Key*
-     must be filled in; *Client Certificate* and *Client Key* stay empty.
-3. Scroll to **Custom Configuration** and **delete the
-   `verify-x509-name CN=…` line** the import added. It pins the client to the
-   one server in the file, and is enforced even with *Verify Server
-   Certificate Name* set to No; leaving it in makes every rotation fail with
-   `VERIFY X509NAME ERROR`. Keep the other lines, and add these three:
-
-   ```
-   pull-filter ignore "ping"
-   ping 15
-   ping-restart 120
-   ```
-
-   The server pushes `ping 60`, so an idle tunnel sends nothing for a minute.
-   Behind carrier-grade NAT (a WAN address in `100.64.0.0/10`) the UDP
-   mapping expires before that, the server's packets stop arriving, and
-   OpenVPN restarts the tunnel ("Inactivity timeout") every few minutes. The
-   official Linux app sets `ping 15` for the same reason; the `pull-filter`
-   stops the server overriding it.
-4. Set **Enable OpenVPN client** to **Yes** (this also starts it at boot) and
-   click **Apply**. *Status* should change to **Connected** after a few
-   seconds.
-
-> Notes from testing
-> * NordVPN's "2.6" servers only listen on **port 53**; port 1194 gets no
->   answer.
-> * Don't add `hand-window` to shorten connection waits: with 15 s, every
->   handshake failed.
-> * The VPN Client page saves the server address that was showing when the
->   page loaded. After a rotation, **reload the page before clicking Apply**,
->   or it switches back to the old server.
-
-## 3. Send only the TV through the VPN
-
-Click **click here** under *VPN Director rules related to this client* (or
-**VPN → VPN Director**) and add:
-
-| Enable | Description | Local IP | Remote IP | Iface |
-| --- | --- | --- | --- | --- |
-| ✓ | LG TV | `192.168.50.215` | *(empty)* | OVPN1 |
-
-Click **+**, then **Apply**. Check from your PC (the first should print your
-VPN country, the second your real one):
-
-```sh
-ssh root@192.168.50.215 'curl -s https://ipinfo.io/country'
-curl -s https://ipinfo.io/country
-```
-
-## 4. Install the router scripts
+## 2. Install the router scripts
 
 **Administration → System**: set *Enable JFFS custom scripts and configs*
-to **Yes** and *Enable SSH* to **LAN only**, then **Apply**.
+to **Yes** and *Enable SSH* to **LAN only**, then **Apply**. While there, set
+the **NTP servers to IP addresses** (e.g. `162.159.200.1` and
+`216.239.35.0`): after a reboot the router's clock is wrong until it syncs,
+and if DNS is having a bad day it can't look up NTP server names.
 
 From this repo on your PC:
 
@@ -143,20 +89,64 @@ From this repo on your PC:
 ./router/install.sh admin@192.168.50.1 192.168.50.215
 ```
 
-This copies `nord-rotate.sh`, `rotate-http.sh` and `nord-watchdog.sh` to
-`/jffs/scripts/`, adds these lines to `/jffs/scripts/services-start` (so they
-start at every boot), and starts them:
+This copies the scripts to `/jffs/scripts/` (and flushes them to flash, so a
+reboot straight afterwards doesn't leave empty files), adds the listener, the
+watchdog and a cron job that restarts the watchdog if it dies to
+`/jffs/scripts/services-start` (run at every boot), and starts them. Run it
+again after changing anything in `router/`.
+
+The listener is
+`socat TCP-LISTEN:8099,bind=192.168.50.1,…,range=192.168.50.215/32`:
+`bind=` keeps it off the internet side; `range=` accepts connections from the
+TV only.
+
+## 3. Set up the NordLynx (WireGuard) client
+
+1. Get an access token: Nord Account → **NordVPN → Set up NordVPN manually →
+   Generate new token**.
+2. Store your NordLynx private key on the router (asks for the token; prints
+   neither):
+
+   ```sh
+   ./tools/nordlynx-key.sh admin@192.168.50.1
+   ```
+
+3. Pick the first server. This fills in and enables WireGuard client 1
+   (address `10.5.0.2/32`, DNS `103.86.96.100`, server public key, endpoint
+   port 51820, keepalive 25 s, kill switch on), so **don't fill in the
+   WireGuard page yourself**:
+
+   ```sh
+   ssh admin@192.168.50.1 /jffs/scripts/nord-rotate.sh
+   ```
+
+   It prints e.g. `-> uk2468.nordvpn.com`. Reload **VPN → VPN Client →
+   WireGuard → Client 1**: the fields are filled in and the status log shows
+   a *latest handshake*. Always reload that page before clicking Apply on it:
+   it saves the server that was showing when the page loaded.
+
+   That page also shows your private key in full; anyone with it can use
+   your NordVPN account, so don't share screenshots of it.
+4. **VPN → VPN Director → Add new rule** (or, on the WireGuard client page,
+   *VPN Director rules related to this client → click here*):
+
+   | Enable | Description | Local IP | Remote IP | Iface |
+   | --- | --- | --- | --- | --- |
+   | ✓ | LG TV | `192.168.50.215` | *(empty)* | WGC1 |
+
+   Click **OK**, then **Apply**.
+5. Check from your PC (the first should print your VPN country, the second
+   your real one):
+
+   ```sh
+   ssh root@192.168.50.215 'curl -s https://ipinfo.io/country'
+   curl -s https://ipinfo.io/country
+   ```
+
+Test the listener:
 
 ```sh
-nohup socat TCP-LISTEN:8099,bind=192.168.50.1,reuseaddr,fork,range=192.168.50.215/32 EXEC:/jffs/scripts/rotate-http.sh >/dev/null 2>&1 </dev/null &
-nohup /jffs/scripts/nord-watchdog.sh >/dev/null 2>&1 </dev/null &
-```
-
-`bind=` keeps it off the internet side; `range=` accepts connections from
-the TV only. Test it:
-
-```sh
-ssh root@192.168.50.215 'curl -s http://192.168.50.1:8099/status'   # e.g. "uk2794.nordvpn.com state=2"
+ssh root@192.168.50.215 'curl -s http://192.168.50.1:8099/status'   # e.g. "uk2794.nordvpn.com state=2 phase=connected secs=310"
 curl -s --max-time 5 http://192.168.50.1:8099/status || echo refused # from the PC: refused
 ```
 
@@ -169,31 +159,40 @@ Router endpoints (all `GET`, TV only):
 | `/rotate?country=ID` | New server anywhere in this country |
 | `/cancel` | Back to the server before the last `/rotate` |
 | `/countries[?refresh=1]` | NordVPN's country and city list (cached until reboot) |
-| `/status` | Current server, tunnel state (`2` = connected) and the watchdog's `phase=… secs=…` |
+| `/status` | Current server, `state=2` when connected, and the watchdog's `phase=… secs=…` |
 
-Server lists are saved per location in `/jffs/scripts/nord-cache/` and
-reused for 30 minutes, so most rotations don't contact NordVPN at all. If
-NordVPN's API can't be reached, the last saved list is used instead.
+Server lists (IP, hostname, public key) are saved per location in
+`/jffs/scripts/nord-cache/` and reused for 30 minutes, so most rotations
+don't contact NordVPN at all. If NordVPN's API can't be reached, the last
+saved list is used instead. The router connects to the last address
+`api.nordvpn.com` answered on (saved in `/jffs/scripts/nord-api-ip`) and only
+looks the name up, over DNS-over-HTTPS and then plain DNS, when that fails,
+so a throttled port 53 doesn't break rotations.
 
 ### The watchdog
 
-A healthy connection finishes within about 12 s. A failed one (the server
-never answers the TLS handshake, or never sends `PUSH_REPLY`) only gives up
-after OpenVPN's 60 s timeout, and the retry on the same server usually fails
-too. `nord-watchdog.sh` reads the OpenVPN log every 3 s and:
-
-* soft-restarts an attempt still unfinished after 20 s (the same restart
-  OpenVPN does itself at 60 s);
-* after two such restarts on one server, switches to another server in the
-  last location used (at most once every 5 minutes), and skips the failed
-  server for 30 minutes.
+A healthy NordLynx handshake takes about a second, but WireGuard retries a
+server that doesn't answer forever, leaving the TV offline. `nord-watchdog.sh`
+checks the last handshake every 3 s and, if there's been none for 30 s since
+the last switch (or for 200 s on an established tunnel), switches to another
+server in the last location used (at most once every 2 minutes) and skips
+the failed server for 30 minutes.
 
 It logs to syslog as `nord-watchdog`. Settings are at the top of the script.
 
 You can also rotate by hand on the router:
 `/jffs/scripts/nord-rotate.sh`, `… city 2978888`, or `… country 227`.
 
-## 5. Install the app on the TV
+### Coming from the OpenVPN version
+
+1. Rerun `router/install.sh` (it also removes the iptables kill switch an
+   earlier version added).
+2. Do step 3 above.
+3. **VPN → VPN Client → OpenVPN → Client 1**: *Enable* **No**, then Apply.
+4. In VPN Director, delete the old `LG TV` rule (iface OVPN1) and add the
+   WGC1 one from step 3.4.
+
+## 4. Install the app on the TV
 
 ```sh
 ./tools/install-app.sh root@192.168.50.215
@@ -223,6 +222,9 @@ and press Ctrl+C after `"state":"installed"`. ares-package warns about
   (through the Homebrew Channel) so they start a fresh session on the new IP.
 * The status card turns amber while connecting (showing the router's
   progress) and green once the new IP is confirmed in the expected country.
+* If a switch fails (e.g. NordVPN's API can't be reached for a location
+  that has no saved list yet), the router keeps its current server and the
+  card says **Still secured on uk…** next to the error.
 
 ### Settings in `app/index.html`
 
@@ -237,7 +239,8 @@ After changing anything, bump `version` in `app/appinfo.json` (and the
 `v…` label in `index.html`) and reinstall.
 
 Router-side settings are at the top of `router/nord-rotate.sh`: `CLIENT`
-(VPN client slot, default 1) and the default city ids. Find ids with
+(WireGuard client slot, default 1; also set in `nord-watchdog.sh`) and the
+default city ids. Find ids with
 `python3 tools/nord-probe.py` (UK: country 227; Glasgow 2978888,
 Edinburgh 2975852, Manchester 2991110, London 2989907).
 
@@ -248,19 +251,22 @@ Edinburgh 2975852, Manchester 2991110, London 2989907).
 Router-side state and log:
 
 ```sh
-ssh admin@192.168.50.1 'nvram get vpn_client1_state; nvram get vpn_client1_addr; grep -i ovpn /tmp/syslog.log | tail -20'
+ssh admin@192.168.50.1 'wg show wgc1 | grep -v "private key"; cat /tmp/nord-phase; grep nord- /tmp/syslog.log | tail'
 ```
 
-`vpn_client1_state`: `2` connected, `1` connecting, `-1` error.
+`/tmp/nord-phase` is the watchdog's view (`connected`, `connecting` or
+`down`, and seconds since the last switch); the log shows every switch and
+why.
 
 | Symptom | Cause / fix |
 | --- | --- |
 | App says "offline" | Tunnel down; the kill switch blocks the TV. Press **New server**. |
-| Takes 60–150 s to connect | Log shows `PUSH_REQUEST` repeated, then `No reply from server to push requests`, or `TLS key negotiation failed`. The server stalls and OpenVPN only retries after 60 s. Check the watchdog is running: `ssh admin@192.168.50.1 'cat /tmp/nord-watchdog.pid; cat /tmp/nord-phase'`. |
-| Tunnel drops every few minutes | Log shows `Inactivity timeout (--ping-restart)`. Add the keepalive lines from step 2.3. Count them with `grep -c "Inactivity timeout" /tmp/syslog.log`. |
-| `VERIFY X509NAME ERROR` | Remove `verify-x509-name` from Custom Configuration (step 2.3). |
+| Stuck on "Contacting server…" | No WireGuard handshake: `ssh admin@192.168.50.1 'wg show wgc1'`. If *latest handshake* never appears on any server, check the private key (rerun `tools/nordlynx-key.sh`). Check the watchdog is running: `cat /tmp/nord-watchdog.pid; cat /tmp/nord-phase`. |
+| `No NordLynx private key on the router yet` | Run `tools/nordlynx-key.sh` (step 3.2). |
+| Router won't connect after a reboot | Clock not synced (`nvram get ntp_ready` is `0`). Use NTP server IPs (step 2). |
 | `Couldn't reach the router` | Listener not running: `ssh admin@192.168.50.1 'pidof socat'`; rerun `router/install.sh`. |
-| `No servers available: NordVPN unreachable and no saved list yet` | The router couldn't reach `api.nordvpn.com` (its own lookups are sometimes slow) and has never fetched this location before. Try again; once a location has been fetched, its saved list is used as a fallback. Also check the city/country id. |
+| `No servers available: NordVPN unreachable and no saved list yet` | The router couldn't reach NordVPN's API and has never fetched this location before. Try again; once a location has been fetched, its saved list is used as a fallback. Also check the city/country id. |
+| Empty files in `/jffs/scripts/` | The router rebooted before they were written to flash. Rerun `router/install.sh`. |
 | TV not in the VPN country | Check the VPN Director rule and that the TV still has its reserved IP. |
 | Streaming app still blocked | Most NordVPN IPs are known to the big services; rotating helps sometimes. Fully close the app (the app does this for you) before retrying. |
 

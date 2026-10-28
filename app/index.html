@@ -105,7 +105,7 @@
 
   <div class="footer">
     <span id="hint"></span>
-    <span><span class="toast" id="toast"></span> &nbsp; <span class="ver">v1.7.0</span></span>
+    <span><span class="toast" id="toast"></span> &nbsp; <span class="ver">v1.8.1</span></span>
   </div>
 </div>
 
@@ -121,7 +121,7 @@
   var CLOSE_CMD = String.raw`luna-send -n 1 luna://com.webos.applicationManager/running '{}' | grep -oE '"id": ?"[^"]+"' | cut -d'"' -f4 | grep -iE 'disney|bbc|iplayer|netflix|^amazon$' | while read a; do luna-send -n 1 luna://com.webos.applicationManager/closeByAppId "{\"id\":\"$a\"}" >/dev/null; echo "$a"; done`;
   var EXEC_URI = "luna://org.webosbrew.hbchannel.service/exec";
 
-  // The router's watchdog restarts a stuck attempt after 20 s and switches server after two,
+  // The router's watchdog switches server after 30 s without a WireGuard handshake,
   // so a connect that hasn't finished by now won't.
   var WAIT_MS = 90000;
   var LONG_PRESS_MS = 800;   // hold OK this long to toggle a favourite
@@ -253,7 +253,8 @@
   }
   function rotatingFact() { return ["Rotating in", locLabel(current)]; }
 
-  function showExit(info) {
+  // unchanged: a switch just failed, so say the TV is still on its old server.
+  function showExit(info, unchanged) {
     lastExit = info;
     if (!info) {
       setFlag($("bigflag"), "");
@@ -264,7 +265,7 @@
     }
     setFlag($("bigflag"), info.country);
     $("title").textContent = [info.city, countryName(info.country)].filter(Boolean).join(", ");
-    setState("secured", "Secured");
+    setState("secured", unchanged && serverName ? "Still secured on " + serverName : "Secured");
     var facts = [["IP", info.ip]];
     if (serverName) facts.push(["Server", serverName]);
     facts.push(rotatingFact());
@@ -279,15 +280,14 @@
   }
 
   // ---- Router status ----
-  // "uk2798.nordvpn.com state=2 phase=waiting secs=7"; phase and secs (age of the router's
+  // "uk2798.nordvpn.com state=2 phase=connected secs=7"; phase and secs (time since the router's
   // current connection attempt) are only there while nord-watchdog.sh runs.
   function parseStatus(status, body) {
     var m = status === 200 && /^(\S+) state=(\S*)(?: phase=(\S+) secs=(\d+))?/.exec(body.trim());
     if (!m) return null;
     return { name: m[1].replace(/\.nordvpn\.com$/, ""), phase: m[3] || "", secs: m[4] ? +m[4] : 0 };
   }
-  var PHASE_TEXT = { connecting: "Contacting server…", waiting: "Waiting for the server…",
-                     down: "Restarting the VPN…" };
+  var PHASE_TEXT = { connecting: "Contacting server…", down: "Restarting the VPN…" };
 
   // ---- Rotation ----
   // Every attempt (and every cancel) bumps run, so callbacks from an older one drop out.
@@ -325,11 +325,6 @@
         setFacts([["Server", s.name], rotatingFact()]);
       }
       if (s) serverName = s.name;
-      if (s && s.phase === "auth-failed") {
-        finish("NordVPN rejected the service credentials (router: VPN Client → Username / Password)", "err", null);
-        return;
-      }
-      if (s && s.phase === "off") { finish("VPN client 1 is turned off on the router", "err", null); return; }
       // Connected, and the session started after we asked (the old one doesn't count).
       var fresh = s && s.phase === "connected" && s.secs <= secs + 3;
       if (s && s.phase && !fresh) {
@@ -371,16 +366,22 @@
       stage = "rotating";
       var asked = Date.now();
       (function ask() {
-        get(ROUTER + "/rotate?" + current.query, 30000, function (status, body) {
+        get(ROUTER + "/rotate?" + current.query, 90000, function (status, body) {
           if (my !== run) return;
           var out = body.trim();
           if (status === 0) {
-            finish("Couldn't reach the router (" + ROUTER.replace(/^https?:\/\//, "") + ")", "err", lastExit); return;
+            finish("Couldn't reach the router (" + ROUTER.replace(/^https?:\/\//, "") + ")", "err");
+            checkIdle(true);
+            return;
           }
           // Another switch (e.g. the watchdog's) is running; they take a few seconds.
           if (status === 409 && Date.now() - asked < 20000) { setTimeout(ask, 2000); return; }
           if (status !== 200 || !/->/.test(out)) {
-            finish("Rotation failed (" + status + "): " + (out || "no output from router"), "err", lastExit); return;
+            // The router keeps its current server when a switch fails; re-check rather than
+            // show the IP from before as if nothing had been tried.
+            finish("Rotation failed (" + status + "): " + (out || "no output from router"), "err");
+            checkIdle(true);
+            return;
           }
           var line = out.split("\n").pop();
           serverName = line.split("->").pop().trim().replace(/\.nordvpn\.com$/, "");
@@ -422,14 +423,14 @@
   }
 
   // When idle: shows the exit IP, or that the router is reconnecting rather than "offline".
-  function checkIdle() {
+  function checkIdle(unchanged) {
     var my = run;
     if (busy) return;
     get(ROUTER + "/status", 3000, function (status, body) {
       if (busy || my !== run) return;
       var s = parseStatus(status, body);
       if (s) serverName = s.name;
-      if (s && s.phase && s.phase !== "connected" && s.phase !== "off" && s.phase !== "auth-failed") {
+      if (s && s.phase && s.phase !== "connected") {
         setFlag($("bigflag"), current.code);
         $("title").textContent = serverName || locLabel(current);
         setState("connecting", "Router is reconnecting… " + s.secs + " s");
@@ -438,8 +439,7 @@
       }
       getExit(function (info) {
         if (busy || my !== run) return;
-        showExit(info);
-        if (!info && s && s.phase === "auth-failed") setNote("NordVPN rejected the service credentials", "err");
+        showExit(info, unchanged);
       });
     });
   }

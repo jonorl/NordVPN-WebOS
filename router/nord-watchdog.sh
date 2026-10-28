@@ -1,88 +1,71 @@
 #!/bin/sh
-# Stops VPN client 1 sitting in OpenVPN's 60 s timeouts.
-# On this setup a healthy connect finishes within ~12 s of "UDPv4 link remote".
-# A failed one (server never sends PUSH_REPLY, or never answers the TLS
-# handshake) only gives up after 60 s, and the retry on the same server usually
-# fails too. So, like the official Linux app bounding its connect attempts:
-#   * an attempt still unfinished after $STALL_SECS is soft-restarted (SIGUSR1,
-#     the same restart OpenVPN does itself after 60 s);
-#   * after $ROTATE_AFTER such restarts in a row on one server, it switches to
-#     another server in the last location used, and skips the failed one for
-#     a while (see BAD_FILE in nord-rotate.sh).
+# Keeps WireGuard client 1 on a NordVPN server that answers.
+# WireGuard retries its handshake every 5 s on its own and never gives up, so
+# a server that doesn't answer leaves the TV offline indefinitely (the
+# kill switch blocks it). A healthy NordLynx handshake takes about a second,
+# so if there's been no handshake for $STALL_SECS since the last switch (or
+# since the tunnel went stale), this switches to another server in the last
+# location used and skips the failed one for a while (BAD_FILE in
+# nord-rotate.sh).
 # It also writes the tunnel's phase to $PHASE_FILE for the app (/status):
-#   connecting  sent the first packet, no TLS handshake yet
-#   waiting     handshake done, waiting for the server's PUSH_REPLY
-#   connected   tunnel up
-#   down        OpenVPN exited (also briefly during a full restart)
-#   auth-failed NordVPN rejected the service credentials
-#   off         VPN client disabled
-# Started from /jffs/scripts/services-start; install to /jffs/scripts/nord-watchdog.sh.
+#   connecting  no handshake with the current server yet (or none for too long)
+#   connected   tunnel up; secs is the time since the last switch
+#   down        WireGuard interface missing (client off, or mid-restart)
+# Started from services-start and every 5 minutes from cron; install to
+# /jffs/scripts/nord-watchdog.sh.
 
 CLIENT=1
-STALL_SECS=20
-ROTATE_AFTER=2          # 0 = never switch server, only restart
-ROTATE_GAP=300          # min seconds between switches, so an outage doesn't rewrite nvram every minute
+STALL_SECS=30           # a handshake normally takes ~1 s, but up to ~25 s on a lossy evening link
+STALE_SECS=200          # WireGuard re-handshakes every 2 min while keepalives flow
+ROTATE_GAP=120          # min seconds between switches, so an outage doesn't rewrite nvram constantly
 INTERVAL=3
-LOG=/tmp/syslog.log
+WG=wgc${CLIENT}
 PHASE_FILE=/tmp/nord-phase
 BAD_FILE=/tmp/nord-bad
+SWITCHED_FILE=/tmp/nord-switched
 PID_FILE=/tmp/nord-watchdog.pid
 LOC_FILE=/jffs/scripts/nord-location
 
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then exit 0; fi
+# Exits if a watchdog is alive, and replaces one that has stopped updating
+# $PHASE_FILE (hung).
+if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  m=$(date -r "$PHASE_FILE" +%s 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - m )) -lt 60 ] && exit 0
+  logger -t nord-watchdog "previous watchdog stopped updating, replacing it"
+  kill "$(cat "$PID_FILE")" 2>/dev/null
+fi
 echo $$ > "$PID_FILE"
 
-# Prints "phase secs ip attempt" for the latest connection attempt, where secs
-# is how long ago it started and attempt identifies it (start time + pid).
-# Reads the end of the previous log too, in case syslog has just rotated.
-phase() {
-  { tail -n 300 "$LOG-1" 2>/dev/null; tail -n 2000 "$LOG" 2>/dev/null; } \
-    | grep "ovpn-client${CLIENT}\[" | tail -n 80 \
-    | awk -v now="$(date +%H:%M:%S)" '
-        function secs(t,  a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + a[3] }
-        /UDPv4 link remote/ { ph = "connecting"; start = secs($3); att = $3 "/" $4
-                              ip = $NF; sub(/.*\]/, "", ip); sub(/:.*/, "", ip) }
-        /Peer Connection Initiated/ { ph = "waiting" }
-        /Initialization Sequence Completed/ { ph = "connected" }
-        /AUTH_FAILED/ { ph = "auth-failed" }
-        /process exiting/ { if (ph != "auth-failed") ph = "down" }
-        END {
-          if (ph == "") { print "unknown 0 - -"; exit }
-          print ph, (secs(now) - start + 86400) % 86400, ip, att
-        }'
-}
-
-kicked=""       # attempt already restarted, so it isn't restarted twice
-fails=0         # restarts in a row on fail_ip
-fail_ip=""
+bad_since=0     # when the tunnel was first seen without a usable handshake
 last_rotate=0
+# Deliberately no nvram here: "nvram get" once blocked the loop for hours.
 while :; do
-  set -- $(phase)
-  ph=$1; secs=$2; ip=$3; att=$4
-  [ "$(nvram get vpn_client${CLIENT}_state)" = 0 ] && ph=off
+  now=$(date +%s)
+  switched=$(cat "$SWITCHED_FILE" 2>/dev/null || echo 0)
+  hs=$(wg show $WG latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+  if [ -z "$hs" ]; then
+    ph=down; secs=0; bad_since=0
+  elif [ "$hs" -ge "$switched" ] && [ $((now - hs)) -lt "$STALE_SECS" ]; then
+    # Only a handshake since the last switch counts: the old server's can
+    # linger until the restart has gone through.
+    ph=connected; secs=$((now - switched)); bad_since=0
+  else
+    [ "$bad_since" -gt 0 ] || bad_since=$now
+    # No handshake since the switch: count from the switch. Otherwise (tunnel
+    # went stale, or no switch recorded since boot) from when it was noticed.
+    if [ "$hs" -lt "$switched" ]; then start=$switched; else start=$bad_since; fi
+    ph=connecting; secs=$((now - start))
+  fi
   echo "$ph $secs" > "$PHASE_FILE.tmp" && mv "$PHASE_FILE.tmp" "$PHASE_FILE"
 
-  case $ph in
-    connected) fails=0 ;;
-    connecting|waiting)
-      # Skip while nord-rotate.sh is switching; it restarts the client anyway.
-      if [ "$secs" -ge "$STALL_SECS" ] && [ "$att" != "$kicked" ] && [ ! -d /tmp/nord-rotate.lock ]; then
-        kicked=$att
-        [ "$ip" = "$fail_ip" ] || { fails=0; fail_ip=$ip; }
-        fails=$((fails + 1))
-        if [ "$ROTATE_AFTER" -gt 0 ] && [ "$fails" -ge "$ROTATE_AFTER" ] \
-            && [ $(( $(date +%s) - last_rotate )) -ge "$ROTATE_GAP" ]; then
-          last_rotate=$(date +%s)
-          logger -t nord-watchdog "$ip still not connected after $fails restarts, switching server"
-          echo "$(date +%s) $ip" >> "$BAD_FILE"
-          fails=0
-          KEEP_PREVIOUS=1 /jffs/scripts/nord-rotate.sh $(cat "$LOC_FILE" 2>/dev/null) >/dev/null 2>&1
-        else
-          logger -t nord-watchdog "$ip $ph for ${secs}s, restarting the attempt"
-          kill -USR1 $(pidof vpnclient${CLIENT}) 2>/dev/null
-        fi
-      fi
-      ;;
-  esac
+  # Skip while nord-rotate.sh is switching, and don't switch more often than ROTATE_GAP.
+  if [ "$ph" = connecting ] && [ "$secs" -ge "$STALL_SECS" ] && [ ! -d /tmp/nord-rotate.lock ] \
+      && [ $((now - last_rotate)) -ge "$ROTATE_GAP" ]; then
+    ip=$(wg show $WG endpoints 2>/dev/null | awk '{sub(/:.*/, "", $2); print $2; exit}')
+    logger -t nord-watchdog "$ip: no handshake for ${secs}s, switching server"
+    echo "$now $ip" >> "$BAD_FILE"
+    last_rotate=$now
+    KEEP_PREVIOUS=1 /jffs/scripts/nord-rotate.sh $(cat "$LOC_FILE" 2>/dev/null) >/dev/null 2>&1
+  fi
   sleep "$INTERVAL"
 done

@@ -10,6 +10,7 @@
 # Install to /jffs/scripts/rotate-http.sh and chmod +x.
 
 COUNTRIES_CACHE=/tmp/nord-countries.json
+. /jffs/scripts/nord-api.sh
 
 read -r line
 target=$(printf '%s' "$line" | awk '{print $2}')
@@ -58,8 +59,7 @@ case "$path" in
     ;;
   /countries)
     if [ -n "$(param refresh)" ] || [ ! -s "$COUNTRIES_CACHE" ]; then
-      curl -s --connect-timeout 8 --max-time 15 --retry 1 --retry-delay 1 \
-          https://api.nordvpn.com/v1/servers/countries > "$COUNTRIES_CACHE.tmp" \
+      api_get https://api.nordvpn.com/v1/servers/countries > "$COUNTRIES_CACHE.tmp" \
         && grep -q '"cities"' "$COUNTRIES_CACHE.tmp" \
         && mv "$COUNTRIES_CACHE.tmp" "$COUNTRIES_CACHE"
       rm -f "$COUNTRIES_CACHE.tmp"
@@ -72,13 +72,16 @@ case "$path" in
     fi
     ;;
   /status)
-    out="$(cat /jffs/scripts/nord-current 2>/dev/null || nvram get vpn_client1_addr) state=$(nvram get vpn_client1_state)"
+    # No nvram here: it can block. state=2 means connected, as Merlin's VPN states.
+    name=$(cat /jffs/scripts/nord-current 2>/dev/null); [ -n "$name" ] || name=unknown
     # Only trust the phase while the watchdog is updating it (every 3 s).
     if [ -f /tmp/nord-phase ] && [ $(( $(date +%s) - $(date -r /tmp/nord-phase +%s) )) -lt 15 ]; then
       read -r ph secs < /tmp/nord-phase
-      out="$out phase=$ph secs=$secs"
+      state=1; [ "$ph" = connected ] && state=2
+      reply "200 OK" "$name state=$state phase=$ph secs=$secs"
+    else
+      reply "200 OK" "$name state="
     fi
-    reply "200 OK" "$out"
     ;;
   *)
     reply "404 Not Found" "Use /rotate, /cancel, /countries or /status"
