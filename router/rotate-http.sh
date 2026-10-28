@@ -3,8 +3,10 @@
 #   GET /rotate                     -> default location (see nord-rotate.sh)
 #   GET /rotate?city=ID[,ID...]     -> random server in these cities
 #   GET /rotate?country=ID          -> random server in this country
+#   GET /cancel                     -> back to the server before the last /rotate
 #   GET /countries[?refresh=1]      -> NordVPN country + city list (JSON, cached until reboot)
-#   GET /status                     -> current server and tunnel state
+#   GET /status                     -> current server, tunnel state and, while
+#                                      nord-watchdog.sh runs, "phase=X secs=N"
 # Install to /jffs/scripts/rotate-http.sh and chmod +x.
 
 COUNTRIES_CACHE=/tmp/nord-countries.json
@@ -32,6 +34,15 @@ headers() {
 }
 reply() { headers "$1" "text/plain; charset=utf-8"; printf '%s' "$2"; }
 
+rotate() {
+  out=$(/jffs/scripts/nord-rotate.sh "$@" 2>&1); rc=$?
+  case $rc in
+    0) reply "200 OK" "$out" ;;
+    3) reply "409 Busy" "$out" ;;
+    *) reply "500 Error" "$out" ;;
+  esac
+}
+
 case "$path" in
   /rotate)
     city=$(param city)
@@ -40,13 +51,10 @@ case "$path" in
     elif [ -n "$country" ]; then set -- country "$country"
     else set --
     fi
-    if mkdir /tmp/nord-rotate.lock 2>/dev/null; then
-      out=$(/jffs/scripts/nord-rotate.sh "$@" 2>&1); rc=$?
-      rmdir /tmp/nord-rotate.lock
-      if [ $rc -eq 0 ]; then reply "200 OK" "$out"; else reply "500 Error" "$out"; fi
-    else
-      reply "409 Busy" "A rotation is already in progress"
-    fi
+    rotate "$@"
+    ;;
+  /cancel)
+    rotate previous
     ;;
   /countries)
     if [ -n "$(param refresh)" ] || [ ! -s "$COUNTRIES_CACHE" ]; then
@@ -64,9 +72,15 @@ case "$path" in
     fi
     ;;
   /status)
-    reply "200 OK" "$(cat /jffs/scripts/nord-current 2>/dev/null || nvram get vpn_client1_addr) state=$(nvram get vpn_client1_state)"
+    out="$(cat /jffs/scripts/nord-current 2>/dev/null || nvram get vpn_client1_addr) state=$(nvram get vpn_client1_state)"
+    # Only trust the phase while the watchdog is updating it (every 3 s).
+    if [ -f /tmp/nord-phase ] && [ $(( $(date +%s) - $(date -r /tmp/nord-phase +%s) )) -lt 15 ]; then
+      read -r ph secs < /tmp/nord-phase
+      out="$out phase=$ph secs=$secs"
+    fi
+    reply "200 OK" "$out"
     ;;
   *)
-    reply "404 Not Found" "Use /rotate, /countries or /status"
+    reply "404 Not Found" "Use /rotate, /cancel, /countries or /status"
     ;;
 esac

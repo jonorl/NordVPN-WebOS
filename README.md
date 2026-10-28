@@ -32,7 +32,8 @@ Asuswrt-Merlin 3006.102.7, NordVPN OpenVPN "2.6" configs.
 | `app/` | The webOS app (plain HTML/JS; `index.html` is the whole app) |
 | `router/nord-rotate.sh` | Picks a NordVPN server and switches VPN client 1 to it |
 | `router/rotate-http.sh` | HTTP handler run by `socat` for the TV app |
-| `router/install.sh` | Copies both scripts to the router and starts the listener |
+| `router/nord-watchdog.sh` | Restarts or replaces a connection attempt that stalls |
+| `router/install.sh` | Copies the scripts to the router and starts the listener and watchdog |
 | `tools/install-app.sh` | Builds the app and installs it on the TV |
 | `tools/nord-probe.py` | Lists NordVPN's country and city ids |
 
@@ -87,7 +88,20 @@ this IP.
    `verify-x509-name CN=…` line** the import added. It pins the client to the
    one server in the file, and is enforced even with *Verify Server
    Certificate Name* set to No; leaving it in makes every rotation fail with
-   `VERIFY X509NAME ERROR`. Keep the other lines.
+   `VERIFY X509NAME ERROR`. Keep the other lines, and add these three:
+
+   ```
+   pull-filter ignore "ping"
+   ping 15
+   ping-restart 120
+   ```
+
+   The server pushes `ping 60`, so an idle tunnel sends nothing for a minute.
+   Behind carrier-grade NAT (a WAN address in `100.64.0.0/10`) the UDP
+   mapping expires before that, the server's packets stop arriving, and
+   OpenVPN restarts the tunnel ("Inactivity timeout") every few minutes. The
+   official Linux app sets `ping 15` for the same reason; the `pull-filter`
+   stops the server overriding it.
 4. Set **Enable OpenVPN client** to **Yes** (this also starts it at boot) and
    click **Apply**. *Status* should change to **Connected** after a few
    seconds.
@@ -129,12 +143,13 @@ From this repo on your PC:
 ./router/install.sh admin@192.168.50.1 192.168.50.215
 ```
 
-This copies `nord-rotate.sh` and `rotate-http.sh` to `/jffs/scripts/`, adds
-this line to `/jffs/scripts/services-start` (so it starts at every boot), and
-starts it:
+This copies `nord-rotate.sh`, `rotate-http.sh` and `nord-watchdog.sh` to
+`/jffs/scripts/`, adds these lines to `/jffs/scripts/services-start` (so they
+start at every boot), and starts them:
 
 ```sh
 nohup socat TCP-LISTEN:8099,bind=192.168.50.1,reuseaddr,fork,range=192.168.50.215/32 EXEC:/jffs/scripts/rotate-http.sh >/dev/null 2>&1 </dev/null &
+nohup /jffs/scripts/nord-watchdog.sh >/dev/null 2>&1 </dev/null &
 ```
 
 `bind=` keeps it off the internet side; `range=` accepts connections from
@@ -152,12 +167,28 @@ Router endpoints (all `GET`, TV only):
 | `/rotate` | New server in the default cities (Glasgow + Edinburgh) |
 | `/rotate?city=ID[,ID…]` | New server in one of these cities |
 | `/rotate?country=ID` | New server anywhere in this country |
+| `/cancel` | Back to the server before the last `/rotate` |
 | `/countries[?refresh=1]` | NordVPN's country and city list (cached until reboot) |
-| `/status` | Current server and tunnel state (`2` = connected) |
+| `/status` | Current server, tunnel state (`2` = connected) and the watchdog's `phase=… secs=…` |
 
 Server lists are saved per location in `/jffs/scripts/nord-cache/` and
 reused for 30 minutes, so most rotations don't contact NordVPN at all. If
 NordVPN's API can't be reached, the last saved list is used instead.
+
+### The watchdog
+
+A healthy connection finishes within about 12 s. A failed one (the server
+never answers the TLS handshake, or never sends `PUSH_REPLY`) only gives up
+after OpenVPN's 60 s timeout, and the retry on the same server usually fails
+too. `nord-watchdog.sh` reads the OpenVPN log every 3 s and:
+
+* soft-restarts an attempt still unfinished after 20 s (the same restart
+  OpenVPN does itself at 60 s);
+* after two such restarts on one server, switches to another server in the
+  last location used (at most once every 5 minutes), and skips the failed
+  server for 30 minutes.
+
+It logs to syslog as `nord-watchdog`. Settings are at the top of the script.
 
 You can also rotate by hand on the router:
 `/jffs/scripts/nord-rotate.sh`, `… city 2978888`, or `… country 227`.
@@ -182,12 +213,16 @@ and press Ctrl+C after `"state":"installed"`. ares-package warns about
 
 * **New server**: switch to another server in the selected location.
 * **▼** moves into the list: *Favourites*, *Recent connections*, *Countries*.
+* While connecting the button becomes **Cancel** (**OK** or **Back**). If the
+  TV was online before, it goes back to the previous server; otherwise it
+  stops waiting. Picking another location while connecting replaces the
+  attempt.
 * **OK** connects; on a country, **OK** or **▶** opens its cities and **◀**
   goes back. **Hold OK** toggles ★ favourite. **CH ±** pages.
 * Before each switch it closes Disney+, iPlayer, Netflix and Prime Video
   (through the Homebrew Channel) so they start a fresh session on the new IP.
-* The status card turns amber while connecting and green once the new IP is
-  confirmed in the expected country.
+* The status card turns amber while connecting (showing the router's
+  progress) and green once the new IP is confirmed in the expected country.
 
 ### Settings in `app/index.html`
 
@@ -196,7 +231,7 @@ and press Ctrl+C after `"state":"installed"`. ares-package warns about
 | `ROUTER` | `http://192.168.50.1:8099` |
 | `DEFAULT_LOC` | Glasgow + Edinburgh (first run only; your choices are saved on the TV) |
 | `CLOSE_CMD` pattern | `disney|bbc|iplayer|netflix|^amazon$` |
-| `WAIT_MS` / `LONG_PRESS_MS` | 150 s / 0.8 s |
+| `WAIT_MS` / `LONG_PRESS_MS` | 90 s / 0.8 s |
 
 After changing anything, bump `version` in `app/appinfo.json` (and the
 `v…` label in `index.html`) and reinstall.
@@ -221,7 +256,8 @@ ssh admin@192.168.50.1 'nvram get vpn_client1_state; nvram get vpn_client1_addr;
 | Symptom | Cause / fix |
 | --- | --- |
 | App says "offline" | Tunnel down; the kill switch blocks the TV. Press **New server**. |
-| Takes 60–150 s to connect | Log shows `PUSH_REQUEST` repeated, then `No reply from server to push requests`. NordVPN's server stalls; OpenVPN retries after 60 s. Wait, or switch server. |
+| Takes 60–150 s to connect | Log shows `PUSH_REQUEST` repeated, then `No reply from server to push requests`, or `TLS key negotiation failed`. The server stalls and OpenVPN only retries after 60 s. Check the watchdog is running: `ssh admin@192.168.50.1 'cat /tmp/nord-watchdog.pid; cat /tmp/nord-phase'`. |
+| Tunnel drops every few minutes | Log shows `Inactivity timeout (--ping-restart)`. Add the keepalive lines from step 2.3. Count them with `grep -c "Inactivity timeout" /tmp/syslog.log`. |
 | `VERIFY X509NAME ERROR` | Remove `verify-x509-name` from Custom Configuration (step 2.3). |
 | `Couldn't reach the router` | Listener not running: `ssh admin@192.168.50.1 'pidof socat'`; rerun `router/install.sh`. |
 | `No servers available: NordVPN unreachable and no saved list yet` | The router couldn't reach `api.nordvpn.com` (its own lookups are sometimes slow) and has never fetched this location before. Try again; once a location has been fetched, its saved list is used as a fallback. Also check the city/country id. |

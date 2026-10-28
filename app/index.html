@@ -105,7 +105,7 @@
 
   <div class="footer">
     <span id="hint"></span>
-    <span><span class="toast" id="toast"></span> &nbsp; <span class="ver">v1.6.2</span></span>
+    <span><span class="toast" id="toast"></span> &nbsp; <span class="ver">v1.7.0</span></span>
   </div>
 </div>
 
@@ -121,7 +121,9 @@
   var CLOSE_CMD = String.raw`luna-send -n 1 luna://com.webos.applicationManager/running '{}' | grep -oE '"id": ?"[^"]+"' | cut -d'"' -f4 | grep -iE 'disney|bbc|iplayer|netflix|^amazon$' | while read a; do luna-send -n 1 luna://com.webos.applicationManager/closeByAppId "{\"id\":\"$a\"}" >/dev/null; echo "$a"; done`;
   var EXEC_URI = "luna://org.webosbrew.hbchannel.service/exec";
 
-  var WAIT_MS = 150000;      // some NordVPN servers take over a minute to finish connecting
+  // The router's watchdog restarts a stuck attempt after 20 s and switches server after two,
+  // so a connect that hasn't finished by now won't.
+  var WAIT_MS = 90000;
   var LONG_PRESS_MS = 800;   // hold OK this long to toggle a favourite
   var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, BACK: 461, ESC: 27, PGUP: 33, PGDN: 34 };
 
@@ -276,57 +278,168 @@
     });
   }
 
-  // ---- Rotation ----
-  var busy = false, serverName = "";
-  function setBusy(b) { busy = b; $("go").disabled = b; if (!b && zone === "top") $("go").focus(); }
+  // ---- Router status ----
+  // "uk2798.nordvpn.com state=2 phase=waiting secs=7"; phase and secs (age of the router's
+  // current connection attempt) are only there while nord-watchdog.sh runs.
+  function parseStatus(status, body) {
+    var m = status === 200 && /^(\S+) state=(\S*)(?: phase=(\S+) secs=(\d+))?/.exec(body.trim());
+    if (!m) return null;
+    return { name: m[1].replace(/\.nordvpn\.com$/, ""), phase: m[3] || "", secs: m[4] ? +m[4] : 0 };
+  }
+  var PHASE_TEXT = { connecting: "Contacting server…", waiting: "Waiting for the server…",
+                     down: "Restarting the VPN…" };
 
-  function waitForNewIp(oldIp, started, closedNote) {
-    getExit(function (info) {
+  // ---- Rotation ----
+  // Every attempt (and every cancel) bumps run, so callbacks from an older one drop out.
+  var busy = false, serverName = "", run = 0;
+  var stage = "";           // "closing" | "rotating" | "connecting" while busy
+  var hadInternet = false;  // the TV was online before this attempt, so Cancel can go back
+  function setBusy(b) {
+    busy = b;
+    if (!b) stage = "";
+    $("go").textContent = b ? "Cancel" : "New server";
+    if (zone === "top") $("go").focus();
+    updateHint();
+  }
+  function finish(note, cls, info) {
+    if (info !== undefined) showExit(info);
+    setNote(note, cls);
+    setBusy(false);
+  }
+
+  // Polls the router (on the LAN, so reachable while the tunnel is down) until its new
+  // connection is up, then confirms the exit IP. Without the watchdog there's no phase,
+  // so it falls back to waiting for ipinfo to show a different IP.
+  function watch(my, oldIp, started, note) {
+    function again(info) {
       var secs = Math.round((Date.now() - started) / 1000);
-      if (info && info.ip && info.ip !== oldIp) {
-        showExit(info);
-        var match = !current.code || info.country === current.code;
-        setNote(match ? "Connected in " + secs + " s · reopen your app\n" + closedNote
-                      : "Exit country is " + countryName(info.country) + ", expected " + current.country, match ? "ok" : "err");
-        setBusy(false);
-      } else if (Date.now() - started < WAIT_MS) {
-        setState("connecting", "Connecting… " + secs + " s");
-        setTimeout(function () { waitForNewIp(oldIp, started, closedNote); }, 2000);
-      } else {
-        showExit(info);
-        setNote("Server didn't connect after " + secs + " s · Press OK to try another", "err");
-        setBusy(false);
+      if (secs * 1000 < WAIT_MS) setTimeout(function () { watch(my, oldIp, started, note); }, 2000);
+      else finish("Server didn't connect after " + secs + " s · Press OK to try another", "err", info || null);
+    }
+    get(ROUTER + "/status", 3000, function (status, body) {
+      if (my !== run) return;
+      var secs = Math.round((Date.now() - started) / 1000);
+      var s = parseStatus(status, body);
+      if (s && serverName && s.name !== serverName) {   // the watchdog gave up on it
+        setNote(serverName + " didn't respond · trying " + s.name);
+        setFacts([["Server", s.name], rotatingFact()]);
       }
+      if (s) serverName = s.name;
+      if (s && s.phase === "auth-failed") {
+        finish("NordVPN rejected the service credentials (router: VPN Client → Username / Password)", "err", null);
+        return;
+      }
+      if (s && s.phase === "off") { finish("VPN client 1 is turned off on the router", "err", null); return; }
+      // Connected, and the session started after we asked (the old one doesn't count).
+      var fresh = s && s.phase === "connected" && s.secs <= secs + 3;
+      if (s && s.phase && !fresh) {
+        setState("connecting", (PHASE_TEXT[s.phase] || "Connecting…") + " " + secs + " s");
+        again();
+        return;
+      }
+      if (fresh) setState("connecting", "Checking the new IP…");
+      getExit(function (info) {
+        if (my !== run) return;
+        var secs = Math.round((Date.now() - started) / 1000);
+        if (info && info.ip && (fresh || info.ip !== oldIp)) {
+          showExit(info);
+          var match = !current.code || info.country === current.code;
+          finish(match ? "Connected in " + secs + " s · reopen your app" + (note ? "\n" + note : "")
+                       : "Exit country is " + countryName(info.country) + ", expected " + current.country, match ? "ok" : "err");
+          return;
+        }
+        if (!fresh) setState("connecting", "Connecting… " + secs + " s");
+        again(info);
+      });
     });
   }
 
   function rotate() {
-    if (busy) return;
+    var my = ++run;
+    if (!busy) hadInternet = !!lastExit;
     setBusy(true);
+    stage = "closing";
     setNote("Closing streaming apps…");
     closeStreamingApps(function (closedNote) {
+      if (my !== run) return;
       var oldIp = lastExit ? lastExit.ip : "";
       setFlag($("bigflag"), current.code);
       $("title").textContent = locLabel(current);
       setFacts([["IP", oldIp || "—"], rotatingFact()]);
       setState("connecting", "Finding a server…");
       setNote(closedNote);
-      get(ROUTER + "/rotate?" + current.query, 30000, function (status, body) {
-        var out = body.trim();
-        if (status === 0) {
-          setNote("Couldn't reach the router (" + ROUTER.replace(/^https?:\/\//, "") + ")", "err");
-          showExit(lastExit); setBusy(false); return;
-        }
-        if (status !== 200 || !/->/.test(out)) {
-          setNote("Rotation failed (" + status + "): " + (out || "no output from router"), "err");
-          showExit(lastExit); setBusy(false); return;
-        }
-        var line = out.split("\n").pop();
-        serverName = line.split("->").pop().trim().replace(/\.nordvpn\.com$/, "");
-        setNote(closedNote + "\n" + line.replace(/\.nordvpn\.com/g, "").replace("->", "→"));
-        setState("connecting", "Connecting…");
-        var started = Date.now();
-        setTimeout(function () { waitForNewIp(oldIp, started, closedNote); }, 4000);
+      stage = "rotating";
+      var asked = Date.now();
+      (function ask() {
+        get(ROUTER + "/rotate?" + current.query, 30000, function (status, body) {
+          if (my !== run) return;
+          var out = body.trim();
+          if (status === 0) {
+            finish("Couldn't reach the router (" + ROUTER.replace(/^https?:\/\//, "") + ")", "err", lastExit); return;
+          }
+          // Another switch (e.g. the watchdog's) is running; they take a few seconds.
+          if (status === 409 && Date.now() - asked < 20000) { setTimeout(ask, 2000); return; }
+          if (status !== 200 || !/->/.test(out)) {
+            finish("Rotation failed (" + status + "): " + (out || "no output from router"), "err", lastExit); return;
+          }
+          var line = out.split("\n").pop();
+          serverName = line.split("->").pop().trim().replace(/\.nordvpn\.com$/, "");
+          setNote(closedNote + "\n" + line.replace(/\.nordvpn\.com/g, "").replace("->", "→"));
+          setState("connecting", "Connecting…");
+          stage = "connecting";
+          var started = Date.now();
+          setTimeout(function () { watch(my, oldIp, started, closedNote); }, 3000);
+        });
+      })();
+    });
+  }
+
+  // Stops waiting. If the TV was online before and the router has already switched,
+  // goes back to the server it was on; otherwise leaves the router to finish.
+  function cancel() {
+    if (!busy) return;
+    var my = ++run;
+    if (stage !== "connecting" || !hadInternet) {
+      finish(stage === "connecting" ? "Cancelled · the router keeps trying " + serverName : "Cancelled");
+      checkIdle();
+      return;
+    }
+    setState("connecting", "Going back…");
+    setNote("Cancelled · going back to the previous server");
+    get(ROUTER + "/cancel", 15000, function (status, body) {
+      if (my !== run) return;
+      var out = body.trim();
+      if (status !== 200 || !/->/.test(out)) {
+        finish("Couldn't go back: " + (out || "router unreachable"), "err");
+        checkIdle();
+        return;
+      }
+      serverName = out.split("\n").pop().split("->").pop().trim().replace(/\.nordvpn\.com$/, "");
+      setNote("Going back to " + serverName);
+      var started = Date.now();
+      setTimeout(function () { watch(my, "", started, "Back on " + serverName); }, 3000);
+    });
+  }
+
+  // When idle: shows the exit IP, or that the router is reconnecting rather than "offline".
+  function checkIdle() {
+    var my = run;
+    if (busy) return;
+    get(ROUTER + "/status", 3000, function (status, body) {
+      if (busy || my !== run) return;
+      var s = parseStatus(status, body);
+      if (s) serverName = s.name;
+      if (s && s.phase && s.phase !== "connected" && s.phase !== "off" && s.phase !== "auth-failed") {
+        setFlag($("bigflag"), current.code);
+        $("title").textContent = serverName || locLabel(current);
+        setState("connecting", "Router is reconnecting… " + s.secs + " s");
+        setTimeout(checkIdle, 3000);
+        return;
+      }
+      getExit(function (info) {
+        if (busy || my !== run) return;
+        showExit(info);
+        if (!info && s && s.phase === "auth-failed") setNote("NordVPN rejected the service credentials", "err");
       });
     });
   }
@@ -462,14 +575,13 @@
     zone = "top";
     render();
     $("list").scrollTop = 0;
-    if (!busy) $("go").focus();
+    $("go").focus();
   }
 
   function choose() {
     var it = items[sel];
     if (!it || it.kind !== "row") return;
     if (it.country && it.chev) { openCities(it.country); return; }   // a country: show its cities
-    if (busy) { toast("Still connecting — try again in a moment"); return; }
     current = it.loc;
     save("location", current);
     recent = [current].concat(recent.filter(function (r) { return key(r) !== key(current); })).slice(0, 5);
@@ -515,7 +627,7 @@
 
   function updateHint() {
     $("hint").textContent = zone === "top"
-      ? "OK: new server  ·  ▼: locations  ·  Back: exit"
+      ? (busy ? "OK / Back: cancel  ·  ▼: pick another location" : "OK: new server  ·  ▼: locations  ·  Back: exit")
       : drill
         ? "OK: connect  ·  Hold OK: ★ favourite  ·  ◀ / Back: countries  ·  CH ±: page"
         : "OK: connect  ·  ▶: cities  ·  Hold OK: ★ favourite  ·  CH ±: page  ·  Back: close list";
@@ -538,6 +650,7 @@
       e.preventDefault();
       if (zone === "list" && drill) backToCountries();
       else if (zone === "list") enterTop();
+      else if (busy) cancel();
       else window.close();
       return;
     }
@@ -569,16 +682,16 @@
     e.preventDefault();
   });
 
-  $("go").addEventListener("click", function () { if (zone === "top") rotate(); });
-  $("go").addEventListener("mouseover", function () { if (zone !== "top") enterTop(); else if (!busy) $("go").focus(); });
-  window.addEventListener("focus", function () { if (zone === "top" && !busy) $("go").focus(); });
+  $("go").addEventListener("click", function () { if (zone === "top") { if (busy) cancel(); else rotate(); } });
+  $("go").addEventListener("mouseover", function () { if (zone !== "top") enterTop(); else $("go").focus(); });
+  window.addEventListener("focus", function () { if (zone === "top") $("go").focus(); });
 
   // ---- Start ----
   setFlag($("bigflag"), current.code);
   setFacts([rotatingFact()]);
   buildItems(); render();
   $("go").focus();
-  getExit(showExit);
+  checkIdle();
   loadCountries();
 
   // Show the installed version (read from the app's own appinfo.json).
