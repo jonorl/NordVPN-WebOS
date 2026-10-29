@@ -1,0 +1,3 @@
+shell=sh
+# nord-api.sh is sourced from /jffs/scripts, which only exists on the router.
+disable=SC1091

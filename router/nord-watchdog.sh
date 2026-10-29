@@ -65,6 +65,7 @@ while :; do
     logger -t nord-watchdog "$ip: no handshake for ${secs}s, switching server"
     echo "$now $ip" >> "$BAD_FILE"
     last_rotate=$now
+    # shellcheck disable=SC2046 # the file holds "mode id id ...", passed as separate arguments
     KEEP_PREVIOUS=1 /jffs/scripts/nord-rotate.sh $(cat "$LOC_FILE" 2>/dev/null) >/dev/null 2>&1
   fi
   sleep "$INTERVAL"

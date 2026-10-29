@@ -16,7 +16,7 @@ IPK=$(ls "$OUT"/*.ipk)
 echo "Built $(basename "$IPK")"
 
 echo "Installing on $TV ..."
-cat "$IPK" | ssh "$TV" 'cat > /tmp/nordrotate.ipk'
+ssh "$TV" 'cat > /tmp/nordrotate.ipk' < "$IPK"
 
 # luna-send keeps its subscription open after the install finishes, so run it
 # in the background on the TV, wait for the result, then stop it.

@@ -110,7 +110,10 @@ EOF
 fi
 
 mkdir -p "$CACHE_DIR"
+# Unquoted on purpose: collapses the ids to single spaces before joining them.
+# shellcheck disable=SC2086
 CACHE="$CACHE_DIR/wg-$MODE-$(echo $IDS | tr ' ' '_')"
+# shellcheck disable=SC2086
 echo "$MODE $(echo $IDS | tr ' ' ',')" > "$LOC_FILE"
 
 # Fetch "ip hostname key" lines for one id: each server's "station" (its IP),
@@ -144,11 +147,13 @@ else
   fi
 fi
 
-SERVERS=$(cat "$CACHE" 2>/dev/null | grep -E '^[0-9.]+ [^ ]+ [^ ]+$' | grep -v "^${CURRENT_IP} ")
+SERVERS=$(grep -E '^[0-9.]+ [^ ]+ [^ ]+$' "$CACHE" 2>/dev/null | grep -v "^${CURRENT_IP} ")
 
 # Skip servers that recently failed to connect, unless that leaves nothing.
 BAD=$(awk -v now="$(date +%s)" -v max="$BAD_MAX_AGE" 'now - $1 < max {print $2}' "$BAD_FILE" 2>/dev/null)
 if [ -n "$BAD" ] && [ -n "$SERVERS" ]; then
+  # Unquoted echo turns the one-per-line list into a space-separated one.
+  # shellcheck disable=SC2086,SC2116
   GOOD=$(echo "$SERVERS" | awk -v bad=" $(echo $BAD) " 'index(bad, " " $1 " ") == 0')
   [ -n "$GOOD" ] && SERVERS=$GOOD
 fi
@@ -160,5 +165,6 @@ if [ -z "$SERVERS" ]; then
 fi
 
 PICK=$(echo "$SERVERS" | awk -v seed="$(date +%s)$$" 'BEGIN{srand(seed)} {a[NR]=$0} END{print a[int(rand()*NR)+1]}')
+# shellcheck disable=SC2086 # split "ip hostname key" into $1 $2 $3
 set -- $PICK
 switch_to "$1" "$2" "$3" "$SOURCE"

@@ -11,10 +11,10 @@ ROUTER_IP=${ROUTER#*@}
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 echo "Copying scripts to $ROUTER:/jffs/scripts ..."
-cat "$HERE/nord-api.sh" | ssh "$ROUTER" 'cat > /jffs/scripts/nord-api.sh'
-cat "$HERE/nord-rotate.sh" | ssh "$ROUTER" 'cat > /jffs/scripts/nord-rotate.sh && chmod +x /jffs/scripts/nord-rotate.sh'
-cat "$HERE/rotate-http.sh" | ssh "$ROUTER" 'cat > /jffs/scripts/rotate-http.sh && chmod +x /jffs/scripts/rotate-http.sh'
-cat "$HERE/nord-watchdog.sh" | ssh "$ROUTER" 'cat > /jffs/scripts/nord-watchdog.sh && chmod +x /jffs/scripts/nord-watchdog.sh'
+ssh "$ROUTER" 'cat > /jffs/scripts/nord-api.sh' < "$HERE/nord-api.sh"
+ssh "$ROUTER" 'cat > /jffs/scripts/nord-rotate.sh && chmod +x /jffs/scripts/nord-rotate.sh' < "$HERE/nord-rotate.sh"
+ssh "$ROUTER" 'cat > /jffs/scripts/rotate-http.sh && chmod +x /jffs/scripts/rotate-http.sh' < "$HERE/rotate-http.sh"
+ssh "$ROUTER" 'cat > /jffs/scripts/nord-watchdog.sh && chmod +x /jffs/scripts/nord-watchdog.sh' < "$HERE/nord-watchdog.sh"
 # JFFS holds new data in memory for a while; a reboot before it's written leaves empty files.
 ssh "$ROUTER" sync
 
@@ -25,6 +25,7 @@ WATCHDOG="nohup /jffs/scripts/nord-watchdog.sh >/dev/null 2>&1 </dev/null &"
 CRON="cru a nord-watchdog '*/5 * * * * /jffs/scripts/nord-watchdog.sh'"
 
 echo "Adding the listener and watchdog to /jffs/scripts/services-start (if missing) and starting them ..."
+# shellcheck disable=SC2029 # the commands are built here on purpose, with this machine's values
 ssh "$ROUTER" "
   f=/jffs/scripts/services-start
   [ -f \$f ] || echo '#!/bin/sh' > \$f
