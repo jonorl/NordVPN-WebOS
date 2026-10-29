@@ -20,10 +20,10 @@ from the TV with the remote.
         +--> TV internet --> VPN Director rule --> WireGuard client 1 --> NordVPN
 ```
 
-* Only the TV's traffic goes through NordVPN; every other device uses the
-  normal connection.
-* The WireGuard client's kill switch blocks the TV's internet while the
-  tunnel is down, so streaming services never see your real IP.
+* Split tunnelling for one device: only the TV's traffic goes through
+  NordVPN; every other device on the network uses the normal connection.
+* Kill switch: the WireGuard client blocks the TV's internet while the
+  tunnel is down, so nothing from the TV leaks outside the tunnel.
 * NordLynx uses one private key per account and the same tunnel address for
   everyone, so switching server (in any country) only changes the endpoint
   and the server's public key.
@@ -224,7 +224,8 @@ and press Ctrl+C after `"state":"installed"`. ares-package warns about
 * **OK** connects; on a country, **OK** or **▶** opens its cities and **◀**
   goes back. **Hold OK** toggles ★ favourite. **CH ±** pages.
 * Before each switch it closes Disney+, iPlayer, Netflix and Prime Video
-  (through the Homebrew Channel) so they start a fresh session on the new IP.
+  (through the Homebrew Channel) so none keeps a connection open from the
+  previous server.
 * The status card turns amber while connecting (showing the router's
   progress) and green once the new IP is confirmed in the expected country.
 * If a switch fails (e.g. NordVPN's API can't be reached for a location
