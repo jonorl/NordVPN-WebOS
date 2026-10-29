@@ -1,5 +1,8 @@
 # nordvpn-webos
 
+[![ShellCheck](https://github.com/jonorl/NordVPN-WebOS/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/jonorl/NordVPN-WebOS/actions/workflows/shellcheck.yml)
+[![CodeQL](https://github.com/jonorl/NordVPN-WebOS/actions/workflows/codeql.yml/badge.svg)](https://github.com/jonorl/NordVPN-WebOS/actions/workflows/codeql.yml)
+
 Route a rooted LG webOS TV (and only the TV) through NordVPN (NordLynx,
 i.e. WireGuard) on an Asuswrt-Merlin router, and pick or rotate the server
 from the TV with the remote.
