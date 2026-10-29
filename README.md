@@ -7,6 +7,8 @@ Route a rooted LG webOS TV (and only the TV) through NordVPN (NordLynx,
 i.e. WireGuard) on an Asuswrt-Merlin router, and pick or rotate the server
 from the TV with the remote.
 
+![The TV app, connected through a Manchester server](docs/screenshot.png)
+
 ```
  TV app "Rotate VPN"  --HTTP-->  router listener (socat, port 8099, TV only)
         |                              |
