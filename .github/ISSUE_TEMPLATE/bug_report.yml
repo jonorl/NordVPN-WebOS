@@ -1,0 +1,42 @@
+name: Bug report
+description: Something doesn't work on the TV or the router
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Don't paste your NordLynx private key or access token. Remove the `private key` line from any `wg show` output.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what the app or router did instead.
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App version
+      description: Shown at the bottom right of the app, for example v1.8.1.
+    validations:
+      required: true
+  - type: input
+    id: tv
+    attributes:
+      label: TV model and webOS version
+      placeholder: LG C1, webOS 6
+    validations:
+      required: true
+  - type: input
+    id: router
+    attributes:
+      label: Router model and Asuswrt-Merlin version
+      placeholder: RT-AX86U Pro, 3006.102.7
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Router logs
+      description: Output of `wg show wgc1 | grep -v "private key"; cat /tmp/nord-phase; grep nord- /tmp/syslog.log | tail -n 50`
+      render: text
